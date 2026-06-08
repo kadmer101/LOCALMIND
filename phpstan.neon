@@ -1,0 +1,27 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+    - vendor/phpstan/phpstan-strict-rules/rules.neon
+
+parameters:
+    level: 10
+    paths:
+        - app
+        - tests
+        - config
+        - routes
+    treatPhpDocTypesAsCertain: true
+
+    # phpstan-strict-rules ships a "dynamic call to static method" rule that is
+    # fundamentally incompatible with Laravel's facade / Eloquent-builder magic
+    # and with PHPUnit's $this->assert*() style. Disable just this one rule;
+    # all other strict rules (and L10 type checks) remain active.
+    strictRules:
+        dynamicCallOnStaticMethod: false
+
+    excludePaths:
+        - app/Http/Middleware/*
+        # Framework-generated config files ship with loose runtime types
+        # (env-driven array_filter calls) that we don't author or maintain.
+        - config/filesystems.php
+        - config/app.php
+        - config/database.php
