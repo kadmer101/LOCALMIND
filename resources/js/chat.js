@@ -6,6 +6,14 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 const csrf = $('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
 
+// Server-provided locale, extension flags and translated strings.
+const LM = window.LocalMind ?? { ext: {}, i18n: {} };
+const T = LM.i18n ?? {};
+const EXT = LM.ext ?? {};
+const isOn = (name) => Boolean(EXT?.[name]?.enabled);
+// printf-style single-%s substitution for client-side limit messages.
+const fmt = (tpl, val) => (tpl ?? '').replace('%s', val);
+
 const els = {
     log: $('#message-log'),
     textarea: $('#composer-input'),
@@ -16,6 +24,7 @@ const els = {
     emptyState: $('#empty-state'),
     convId: $('#conversation-id'),
     modelSelect: $('#model-select'),
+    sysPrompt: $('#sysprompt-input'),
     flash: $('#flash'),
     dropZone: $('#composer-card'),
     fileInput: $('#file-input'),
@@ -48,11 +57,11 @@ $('#theme-toggle')?.addEventListener('click', () => {
 /* State pill                                                          */
 /* ------------------------------------------------------------------ */
 const STATE_LABELS = {
-    idle: { text: 'Ready · offline', cls: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300' },
-    loading: { text: 'Loading model… (first run is slow)', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' },
-    generating: { text: 'Generating…', cls: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300' },
-    done: { text: 'Done', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' },
-    error: { text: 'Error', cls: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' },
+    idle: { text: T.ready ?? 'Ready · offline', cls: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300' },
+    loading: { text: T.loading ?? 'Loading model…', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' },
+    generating: { text: T.generating ?? 'Generating…', cls: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300' },
+    done: { text: T.done ?? 'Done', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' },
+    error: { text: T.error ?? 'Error', cls: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' },
 };
 function setState(state) {
     const s = STATE_LABELS[state] ?? STATE_LABELS.idle;
@@ -149,20 +158,26 @@ function finalizeBubble(bubble, raw, meta) {
     const toolbar = $('[data-toolbar]', bubble);
     toolbar.innerHTML = '';
 
-    if (meta) {
+    // Speed meter (extension: speed_meter).
+    if (meta && isOn('speed_meter')) {
         const m = document.createElement('span');
         m.textContent = `${meta.chars} chars · ${meta.secs.toFixed(1)}s · ~${meta.cps.toFixed(0)} ch/s`;
         toolbar.appendChild(m);
     }
 
-    const copyBtn = mkToolBtn('Copy', 'Copy message', async () => {
+    const copyLabel = T.copy ?? 'Copy';
+    const copyBtn = mkToolBtn(copyLabel, copyLabel, async () => {
         await navigator.clipboard.writeText(raw);
-        copyBtn.textContent = 'Copied!';
-        setTimeout(() => (copyBtn.textContent = 'Copy'), 1200);
+        copyBtn.textContent = T.copied ?? 'Copied!';
+        setTimeout(() => (copyBtn.textContent = copyLabel), 1200);
     });
-    const regenBtn = mkToolBtn('Regenerate', 'Regenerate response', () => regenerate());
     toolbar.appendChild(copyBtn);
-    toolbar.appendChild(regenBtn);
+
+    // Regenerate (extension: regenerate).
+    if (isOn('regenerate')) {
+        const regenLabel = T.regenerate ?? 'Regenerate';
+        toolbar.appendChild(mkToolBtn(regenLabel, regenLabel, () => regenerate()));
+    }
 }
 
 function mkToolBtn(label, aria, handler) {
@@ -181,8 +196,8 @@ function appendErrorBubble(msg) {
     row.innerHTML =
         `<div class="max-w-[85%] rounded-2xl rounded-bl-sm bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 px-4 py-3 text-sm text-red-700 dark:text-red-300">
             <p>${escapeHtml(msg)}</p>
-            <p class="mt-1 text-xs opacity-80">Tip: make sure Ollama is running (<code>ollama serve</code>).</p>
-            <button type="button" class="mt-2 text-xs font-medium underline" data-retry>Retry</button>
+            <p class="mt-1 text-xs opacity-80">${escapeHtml(T.ollamaHint ?? 'Tip: make sure Ollama is running (ollama serve).')}</p>
+            <button type="button" class="mt-2 text-xs font-medium underline" data-retry>${escapeHtml(T.retry ?? 'Retry')}</button>
         </div>`;
     $('[data-retry]', row).addEventListener('click', () => regenerate());
     els.log.appendChild(row);
@@ -199,37 +214,42 @@ function hideEmpty() {
 let lastPayloadText = '';
 let lastPayloadFiles = [];
 
+function buildPayload(text, files) {
+    const fd = new FormData();
+    fd.append('message', text);
+    if (els.convId.value) fd.append('conversation_id', els.convId.value);
+    if (els.modelSelect) fd.append('model', els.modelSelect.value);
+    // Per-conversation language follows the active UI locale (multilingual ext).
+    if (isOn('multilingual')) fd.append('language', LM.locale ?? 'auto');
+    if (isOn('system_prompt') && els.sysPrompt) {
+        fd.append('system_prompt', els.sysPrompt.value ?? '');
+    }
+    if (isOn('attachments')) files.forEach((f) => fd.append('files[]', f));
+    return fd;
+}
+
 async function send() {
     const text = els.textarea.value.trim();
     if (!text || overLimit) return;
 
-    const files = getStagedFiles();
+    const files = isOn('attachments') ? getStagedFiles() : [];
     lastPayloadText = text;
     lastPayloadFiles = files.slice();
 
     appendUserBubble(text, files);
 
-    const fd = new FormData();
-    fd.append('message', text);
-    if (els.convId.value) fd.append('conversation_id', els.convId.value);
-    if (els.modelSelect) fd.append('model', els.modelSelect.value);
-    files.forEach((f) => fd.append('files[]', f));
+    const fd = buildPayload(text, files);
 
     els.textarea.value = '';
     autoSize();
-    clearStaged();
+    if (isOn('attachments')) clearStaged();
 
     await stream(fd);
 }
 
 async function regenerate() {
     if (!lastPayloadText) return;
-    const fd = new FormData();
-    fd.append('message', lastPayloadText);
-    if (els.convId.value) fd.append('conversation_id', els.convId.value);
-    if (els.modelSelect) fd.append('model', els.modelSelect.value);
-    lastPayloadFiles.forEach((f) => fd.append('files[]', f));
-    await stream(fd);
+    await stream(buildPayload(lastPayloadText, lastPayloadFiles));
 }
 
 async function stream(formData) {
@@ -304,10 +324,10 @@ async function stream(formData) {
     } catch (err) {
         bubble.remove();
         if (err.name === 'AbortError') {
-            if (full) finalizeBubble(appendAssistantBubble(), full + '\n\n_(stopped)_');
+            if (full) finalizeBubble(appendAssistantBubble(), full + `\n\n_${T.stopped ?? '(stopped)'}_`);
             setState('idle');
         } else {
-            appendErrorBubble(err.message || 'Generation failed.');
+            appendErrorBubble(err.message || (T.error ?? 'Generation failed.'));
             setState('error');
         }
     } finally {
@@ -360,7 +380,7 @@ $$('[data-rename]').forEach((btn) =>
         e.stopPropagation();
         const id = btn.dataset.rename;
         const current = btn.dataset.title ?? '';
-        const title = prompt('Rename conversation:', current);
+        const title = prompt(T.renamePrompt ?? 'Rename conversation:', current);
         if (!title) return;
         await fetch(`/c/${id}`, {
             method: 'PATCH',
@@ -374,9 +394,45 @@ $$('[data-rename]').forEach((btn) =>
 
 $$('[data-delete]').forEach((form) =>
     form.addEventListener('submit', (e) => {
-        if (!confirm('Delete this conversation?')) e.preventDefault();
+        if (!confirm(T.deleteConfirm ?? 'Delete this conversation?')) e.preventDefault();
     }),
 );
+
+/* ------------------------------------------------------------------ */
+/* Language switcher dropdown                                          */
+/* ------------------------------------------------------------------ */
+(function languageMenu() {
+    const btn = $('#lang-btn');
+    const menu = $('#lang-menu');
+    if (!btn || !menu) return;
+    const close = () => {
+        menu.classList.add('hidden');
+        btn.setAttribute('aria-expanded', 'false');
+    };
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const hidden = menu.classList.toggle('hidden');
+        btn.setAttribute('aria-expanded', String(!hidden));
+    });
+    document.addEventListener('click', (e) => {
+        if (!menu.contains(e.target) && e.target !== btn) close();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') close();
+    });
+})();
+
+/* ------------------------------------------------------------------ */
+/* System-prompt editor toggle                                         */
+/* ------------------------------------------------------------------ */
+(function systemPrompt() {
+    const toggle = $('#sysprompt-toggle');
+    const panel = $('#sysprompt-panel');
+    if (!toggle || !panel) return;
+    // Open automatically if a prompt is already set.
+    if (els.sysPrompt && els.sysPrompt.value.trim()) panel.classList.remove('hidden');
+    toggle.addEventListener('click', () => panel.classList.toggle('hidden'));
+})();
 
 /* ------------------------------------------------------------------ */
 /* Init                                                                */
@@ -388,7 +444,9 @@ $$('[data-delete]').forEach((form) =>
 
     setState('idle');
 
-    if (els.dropZone) {
+    // Attachments are an optional extension: only wire them up when the
+    // extension is enabled AND the drop-zone DOM is present.
+    if (isOn('attachments') && els.dropZone) {
         const att = initAttachments({
             dropZone: els.dropZone,
             fileInput: els.fileInput,

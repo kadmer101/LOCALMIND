@@ -12,6 +12,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int                             $id
  * @property string                          $title
  * @property string|null                     $model
+ * @property string                          $language
+ * @property string|null                     $system_prompt
  * @property \Illuminate\Support\Carbon|null $created_at
  * @property \Illuminate\Support\Carbon|null $updated_at
  * @property-read \Illuminate\Database\Eloquent\Collection<int, Message> $messages
@@ -25,6 +27,8 @@ class Conversation extends Model
     protected $fillable = [
         'title',
         'model',
+        'language',
+        'system_prompt',
     ];
 
     /**

@@ -56,6 +56,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Force HTTPS Scheme
+    |--------------------------------------------------------------------------
+    |
+    | When running behind a TLS-terminating proxy (e.g. a hosted preview), set
+    | this to true so generated asset/URL schemes use https and avoid
+    | mixed-content blocking. Keep false for local http development.
+    |
+    */
+
+    'force_https' => (bool) env('APP_FORCE_HTTPS', false),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |
