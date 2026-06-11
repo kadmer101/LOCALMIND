@@ -26,7 +26,7 @@ class AppServiceProvider extends ServiceProvider
         // force generated asset/URL schemes to https to avoid mixed-content
         // blocking. Disabled by default so local `php artisan serve` over http
         // keeps working unchanged.
-        if ((bool) env('APP_FORCE_HTTPS', false)) {
+        if ((bool) config('app.force_https', false)) {
             URL::forceScheme('https');
         }
     }

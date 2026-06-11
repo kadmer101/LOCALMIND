@@ -29,10 +29,15 @@ class StreamChatRequest extends FormRequest
         /** @var array<int, string> $allowed */
         $allowed = config('ollama.uploads.allowed_ext', []);
 
+        /** @var int $sysMax */
+        $sysMax = config('extensions.system_prompt.max_chars', 1000);
+
         return [
             'message'         => 'required|string|max:4000',
             'conversation_id' => 'nullable|integer|exists:conversations,id',
             'model'           => 'nullable|string',
+            'language'        => 'nullable|string|max:8',
+            'system_prompt'   => 'nullable|string|max:' . $sysMax,
             'files'           => 'nullable|array|max:' . $maxFiles,
             'files.*'         => 'file|max:' . $maxFileKb . '|mimes:' . implode(',', $allowed),
         ];

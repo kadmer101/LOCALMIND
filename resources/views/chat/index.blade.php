@@ -1,5 +1,9 @@
+@php
+    $locale = app()->getLocale();
+    $dir = config("locale.supported.$locale.dir", 'ltr');
+@endphp
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="{{ $locale }}" dir="{{ $dir }}" class="h-full">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -28,7 +32,7 @@
         <header class="flex items-center justify-between gap-3 px-4 h-14 border-b border-gray-200 dark:border-gray-800">
             <div class="flex items-center gap-2 min-w-0">
                 <span class="font-semibold tracking-tight">{{ config('app.name', 'LocalMind') }}</span>
-                <span class="hidden sm:inline text-xs text-gray-400">· runs locally &amp; offline</span>
+                <span class="hidden sm:inline text-xs text-gray-400">· {{ __('app.tagline') }}</span>
             </div>
 
             <div class="flex items-center gap-2">
@@ -36,7 +40,7 @@
                 <div class="relative">
                     <select id="model-select"
                             class="text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-2.5 py-1.5 pr-7 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                            aria-label="Choose model">
+                            aria-label="{{ __('header.choose_model') }}">
                         @foreach ($models as $key => $meta)
                             <option value="{{ $key }}"
                                 @selected(($active->model ?? $defaultModel) === $key)>
@@ -46,11 +50,15 @@
                     </select>
                 </div>
 
-                <span id="state-pill" class="text-xs px-2.5 py-1 rounded-full font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300">Ready</span>
+                @if (\App\Support\Extensions::enabled('multilingual'))
+                    @include('chat.partials.language')
+                @endif
+
+                <span id="state-pill" class="text-xs px-2.5 py-1 rounded-full font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300">{{ __('state.ready') }}</span>
 
                 <button id="theme-toggle" type="button"
                         class="w-9 h-9 grid place-items-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
-                        aria-label="Toggle dark mode">
+                        aria-label="{{ __('header.toggle_dark') }}">
                     <span id="theme-icon">🌙</span>
                 </button>
             </div>
@@ -79,5 +87,33 @@
         @include('chat.partials.composer')
     </main>
 </div>
+
+{{-- Expose feature flags + state to JS --}}
+<script>
+    window.LocalMind = {
+        locale: @json($locale),
+        dir: @json($dir),
+        ext: @json(\App\Support\Extensions::all()),
+        i18n: {
+            copy: @json(__('message.copy')),
+            copied: @json(__('message.copied')),
+            regenerate: @json(__('message.regenerate')),
+            stopped: @json(__('message.stopped')),
+            generating: @json(__('state.generating')),
+            loading: @json(__('state.loading')),
+            ready: @json(__('state.ready')),
+            done: @json(__('state.done')),
+            error: @json(__('state.error')),
+            renamePrompt: @json(__('actions.rename_prompt')),
+            deleteConfirm: @json(__('actions.delete_confirm')),
+            ollamaHint: @json(__('error.ollama_hint')),
+            retry: @json(__('error.retry')),
+            unsupported: @json(__('limit.unsupported', ['name' => '%s'])),
+            tooBig: @json(__('limit.too_big', ['name' => '%s'])),
+            maxFiles: @json(__('limit.max_files')),
+            total: @json(__('limit.total')),
+        },
+    };
+</script>
 </body>
 </html>

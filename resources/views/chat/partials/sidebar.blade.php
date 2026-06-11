@@ -1,8 +1,8 @@
-<aside class="hidden md:flex w-72 shrink-0 flex-col border-r border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900">
+<aside class="hidden md:flex w-72 shrink-0 flex-col border-e border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900">
     <div class="p-3">
         <a href="{{ route('chat.index') }}"
            class="flex items-center justify-center gap-2 w-full rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-3 py-2.5 transition">
-            <span class="text-base leading-none">＋</span> New chat
+            <span class="text-base leading-none">＋</span> {{ __('sidebar.new_chat') }}
         </a>
     </div>
 
@@ -15,26 +15,32 @@
                     <span data-title-label="{{ $c->id }}">{{ $c->title }}</span>
                 </a>
 
+                @if (\App\Support\Extensions::enabled('export_markdown'))
+                    <a href="{{ route('chat.export', $c) }}"
+                       class="px-1.5 text-gray-400 hover:text-indigo-500 opacity-0 group-hover:opacity-100"
+                       aria-label="{{ __('actions.export') }}" title="{{ __('actions.export') }}">⬇</a>
+                @endif
+
                 <button type="button"
                         class="px-1.5 text-gray-400 hover:text-indigo-500 opacity-0 group-hover:opacity-100"
                         data-rename="{{ $c->id }}" data-title="{{ $c->title }}"
-                        aria-label="Rename conversation">✎</button>
+                        aria-label="{{ __('actions.rename') }}">✎</button>
 
                 <form method="POST" action="{{ route('chat.destroy', $c) }}" data-delete class="px-1.5">
                     @csrf
                     @method('DELETE')
                     <button type="submit"
                             class="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100"
-                            aria-label="Delete conversation">🗑</button>
+                            aria-label="{{ __('actions.delete') }}">🗑</button>
                 </form>
             </div>
         @empty
-            <p class="px-3 py-6 text-xs text-gray-400 text-center">No conversations yet.</p>
+            <p class="px-3 py-6 text-xs text-gray-400 text-center">{{ __('sidebar.no_conversations') }}</p>
         @endforelse
     </nav>
 
     <div class="p-3 border-t border-gray-200 dark:border-gray-800 text-[11px] text-gray-400 leading-relaxed">
-        🔒 Everything stays on your machine.<br>
-        Powered by <span class="font-medium">Ollama</span> + Laravel.
+        🔒 {{ __('sidebar.footer_privacy') }}<br>
+        {{ __('sidebar.footer_powered') }}
     </div>
 </aside>

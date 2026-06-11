@@ -9,9 +9,12 @@ use App\Models\Conversation;
 use App\Models\Message;
 use App\Services\FileExtractorService;
 use App\Services\OllamaService;
+use App\Services\PromptBuilder;
+use App\Support\Extensions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
@@ -34,11 +37,15 @@ class ChatController extends Controller
         /** @var string $defaultModel */
         $defaultModel = config('ollama.default_model');
 
+        /** @var array<string, array<string, string>> $locales */
+        $locales = config('locale.supported', []);
+
         return view('chat.index', [
             'conversations' => $conversations,
             'active'        => $active,
             'models'        => $models,
             'defaultModel'  => $defaultModel,
+            'locales'       => $locales,
         ]);
     }
 
@@ -49,17 +56,15 @@ class ChatController extends Controller
         StreamChatRequest $request,
         OllamaService $ollama,
         FileExtractorService $extractor,
+        PromptBuilder $promptBuilder,
     ): StreamedResponse {
         $message = (string) $request->string('message');
-        $files   = $request->uploadedFiles();
 
+        // Attachments are only processed when the extension is enabled.
+        $files = Extensions::enabled('attachments') ? $request->uploadedFiles() : [];
         $this->assertUploadLimits($files);
 
-        $conversation = $this->resolveConversation(
-            $request->input('conversation_id'),
-            $request->input('model'),
-            $message,
-        );
+        $conversation = $this->resolveConversation($request, $message);
 
         // Build chips + extracted text from any attachments.
         $attachments = $this->buildAttachmentChips($files);
@@ -73,23 +78,28 @@ class ChatController extends Controller
             'attachments'     => $attachments === [] ? null : $attachments,
         ]);
 
-        $history = $this->buildHistory($conversation, $extracted);
+        $model   = $this->resolveModel($conversation, $ollama);
+        $history = $promptBuilder->build(
+            $conversation,
+            $conversation->messages()->orderBy('id')->get(),
+            $extracted,
+        );
 
-        return response()->stream(function () use ($ollama, $history, $conversation): void {
+        return response()->stream(function () use ($ollama, $history, $conversation, $model): void {
             $full = '';
 
             try {
                 $ollama->chatStream(
                     $history,
-                    $conversation->model,
+                    $model,
                     function (string $chunk) use (&$full): void {
                         $full .= $chunk;
                         $this->emit(['delta' => $chunk]);
                     },
                 );
             } catch (\Throwable $e) {
-                $this->emit(['error' => 'Generation failed. Is Ollama running? ('
-                    . $e->getMessage() . ')']);
+                $this->emit(['error' => __('error.generation_failed')
+                    . ' (' . $e->getMessage() . ')']);
 
                 return;
             }
@@ -131,14 +141,62 @@ class ChatController extends Controller
     }
 
     /**
-     * Resolve an existing conversation or create a fresh one titled from the
-     * first user message.
+     * Export a conversation as a downloadable Markdown file.
      */
-    private function resolveConversation(mixed $conversationId, mixed $model, string $message): Conversation
+    public function export(Conversation $conversation): Response
     {
+        abort_unless(Extensions::enabled('export_markdown'), 404);
+
+        $conversation->loadMissing('messages');
+
+        $lines   = [];
+        $lines[] = '# ' . $conversation->title;
+        $lines[] = '';
+        $lines[] = '> Exported from LocalMind · model: ' . ($conversation->model ?? 'default');
+        $lines[] = '';
+
+        foreach ($conversation->messages as $msg) {
+            $who     = $msg->role === 'user' ? '🧑 You' : '🤖 Assistant';
+            $lines[] = '## ' . $who;
+            $lines[] = '';
+            $lines[] = $msg->content;
+            $lines[] = '';
+        }
+
+        $body     = implode("\n", $lines);
+        $slug     = Str::slug($conversation->title);
+        $slug     = $slug !== '' ? $slug : 'conversation';
+        $filename = $slug . '.md';
+
+        return response($body, 200, [
+            'Content-Type'        => 'text/markdown; charset=UTF-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ]);
+    }
+
+    /**
+     * Resolve an existing conversation or create a fresh one titled from the
+     * first user message, applying model / language / system-prompt inputs.
+     */
+    private function resolveConversation(StreamChatRequest $request, string $message): Conversation
+    {
+        $model         = $request->input('model');
         /** @var string $defaultModel */
         $defaultModel  = config('ollama.default_model');
         $resolvedModel = is_string($model) && $model !== '' ? $model : $defaultModel;
+
+        $language = $request->input('language');
+        $language = is_string($language) && $language !== '' ? $language : 'auto';
+
+        $system = null;
+        if (Extensions::enabled('system_prompt')) {
+            $raw    = $request->input('system_prompt');
+            $max    = Extensions::intOption('system_prompt', 'max_chars', 1000);
+            $system = is_string($raw) ? Str::limit(trim($raw), $max, '') : null;
+            $system = $system === '' ? null : $system;
+        }
+
+        $conversationId = $request->input('conversation_id');
 
         $title = Str::limit(trim($message), 48, '…');
         if ($title === '') {
@@ -147,44 +205,52 @@ class ChatController extends Controller
 
         if (is_numeric($conversationId)) {
             $conversation = Conversation::findOrFail((int) $conversationId);
+            $updates      = [];
             if (is_string($model) && $model !== '' && $conversation->model !== $model) {
-                $conversation->update(['model' => $model]);
+                $updates['model'] = $model;
+            }
+            if ($conversation->language !== $language) {
+                $updates['language'] = $language;
+            }
+            if (Extensions::enabled('system_prompt') && $conversation->system_prompt !== $system) {
+                $updates['system_prompt'] = $system;
+            }
+            if ($updates !== []) {
+                $conversation->update($updates);
             }
 
             return $conversation;
         }
 
         return Conversation::create([
-            'title' => $title,
-            'model' => $resolvedModel,
+            'title'         => $title,
+            'model'         => $resolvedModel,
+            'language'      => $language,
+            'system_prompt' => $system,
         ]);
     }
 
     /**
-     * Build the message history (with optional attachment context) for Ollama.
-     *
-     * @return array<int, array{role: string, content: string}>
+     * Pick the model to use, falling back to the default when the requested
+     * model isn't installed in Ollama (model_fallback extension).
      */
-    private function buildHistory(Conversation $conversation, string $extracted): array
+    private function resolveModel(Conversation $conversation, OllamaService $ollama): ?string
     {
-        $history = [];
+        $model = $conversation->model;
 
-        foreach ($conversation->messages()->orderBy('id')->get() as $msg) {
-            $history[] = [
-                'role'    => $msg->role,
-                'content' => $msg->content,
-            ];
+        if ($model === null || ! Extensions::enabled('model_fallback')) {
+            return $model;
         }
 
-        if ($extracted !== '') {
-            // Inject extracted file context just before generation.
-            $history[] = [
-                'role'    => 'system',
-                'content' => "The user attached the following file content:\n" . $extracted,
-            ];
+        $installed = $ollama->installedModels();
+        if ($installed !== [] && ! in_array($model, $installed, true)) {
+            /** @var string $default */
+            $default = config('ollama.default_model');
+
+            return $default;
         }
 
-        return $history;
+        return $model;
     }
 
     /**
